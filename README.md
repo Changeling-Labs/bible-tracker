@@ -81,9 +81,11 @@ regardless.
   Import also rebuilds the stats from an older backup that only had an event log.
 
 ## Cloud sync (optional)
-Sign in from Settings → Cloud Sync with a magic link to keep progress in sync
-across devices (laptop, phone, tablet). Backed by Supabase; nothing leaves the
-device until you sign in. See `supabase/README.md` for one-time backend setup.
+Sign in from Settings → Cloud Sync with a **6-digit email code** to keep
+progress in sync across devices (laptop, phone, tablet). The code works inside
+the installed app as well as a browser tab, which matters because Safari web
+apps have their own storage. Backed by Supabase; nothing leaves the device
+until you sign in. See `supabase/README.md` for one-time backend setup.
 The app still works fully offline; sync runs when online and signed in.
 
 ## Tests

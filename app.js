@@ -9,7 +9,7 @@
   }
 
   var STORE_KEY = "bible-tracker-v1";
-  var APP_VERSION = "1.1.4";
+  var APP_VERSION = "1.1.5";
   var SYNC_CONFIG = {
     url: "https://yzvgkyljkcksbjufneuh.supabase.co",
     key: "sb_publishable_FUpaVGdWuIw-5_eoJeaccw_BOYk8lrk",
@@ -325,7 +325,7 @@
   async function syncNow() {
     try {
       var session = await getSession();
-      if (!session) throw new Error("Sign in with the magic link first.");
+      if (!session) throw new Error("Sign in first.");
     var userId = session.user.id;
     // Pull remote first to avoid clobbering newer data.
     var pullRes = await supabaseClient().from(SYNC_CONFIG.table).select("*")
@@ -424,7 +424,7 @@
       var intro = document.getElementById("syncIntro");
       if (intro) intro.textContent = signedIn
         ? "Progress syncs across your devices while you're signed in. It still saves locally and works offline."
-        : "Sign in with a magic link to sync progress across your devices. Nothing leaves this device until you sign in.";
+        : "Sign in to sync progress across devices. We'll email you a 6-digit code — it works here, even in the installed app.";
       var lastSyncAt = kvGet("lastSyncAt", null);
       var lastError = kvGet("lastError", null);
       // A successful sign-in should not keep showing an old magic-link failure.
@@ -1451,43 +1451,51 @@
     var syncAuto = $("syncAuto");
     var syncReset = $("syncResetCloud");
     if (syncSend) {
-      // Supabase free tier allows only 2 magic-link emails per hour per project,
-      // so throttle client-side to avoid burning the quota on rapid retries.
-      // Persisted so a page reload can't bypass the wait.
+      // Light client cooldown to stop accidental double-sends. The real limit
+      // lives in Supabase; if it bites, the error is shown below.
       var COOLDOWN_KEY = "magicCooldownUntil";
-      var SEND_COOLDOWN_MS = 30 * 60 * 1000; // 30 minutes
+      var SEND_COOLDOWN_MS = 60 * 1000; // 1 minute
       syncSend.addEventListener("click", function () {
         var now = Date.now();
         var cooldownUntil = +kvGet(COOLDOWN_KEY, 0) || 0;
         if (now < cooldownUntil) {
-          var waitMin = Math.ceil((cooldownUntil - now) / 60000);
-          alert("Please wait " + waitMin + " minute(s) before sending another magic link (Supabase free tier allows 2 emails/hour).");
+          var waitSec = Math.ceil((cooldownUntil - now) / 1000);
+          alert("Please wait " + waitSec + "s before requesting another code.");
           return;
         }
         syncSend.disabled = true;
         syncSend.textContent = "Sending…";
         sendMagicLink(syncEmail ? syncEmail.value : "").then(function (email) {
-          alert("Code sent to " + email + ".\n\nEasiest on every device (including this installed app): type the 6-digit code from the email below. The link also works in a normal browser tab.");
+          alert("We emailed a 6-digit code to " + email + ". Enter it below to sign in.");
+          if (syncCode && syncCode.focus) syncCode.focus();
           renderSyncStatus();
         }).catch(function (err) { alert(err.message || String(err)); })
           .finally(function () {
             syncSend.disabled = false;
-            syncSend.textContent = "Send magic link";
+            syncSend.textContent = "Send code";
             kvSet(COOLDOWN_KEY, Date.now() + SEND_COOLDOWN_MS);
           });
       });
     }
     if (syncVerify) syncVerify.addEventListener("click", function () {
       syncVerify.disabled = true;
-      syncVerify.textContent = "Verifying…";
+      syncVerify.textContent = "Signing in…";
       verifyEmailCode(syncEmail ? syncEmail.value : "", syncCode ? syncCode.value : "").then(function () {
         if (syncCode) syncCode.value = "";
-        alert("Signed in ✓");
+        // Signing in means you want sync: turn it on and pull once so this
+        // fresh instance gets the cloud copy without extra taps.
+        kvSet("enabled", true);
+        if (syncAuto) syncAuto.checked = true;
         renderSyncStatus();
+        return syncNow().then(function () {
+          alert("Signed in and synced ✓");
+        }).catch(function (err) {
+          alert("Signed in ✓ — but sync failed: " + (err && err.message ? err.message : String(err)));
+        });
       }).catch(function (err) { alert(err.message || String(err)); renderSyncStatus(); })
         .finally(function () {
           syncVerify.disabled = false;
-          syncVerify.textContent = "Verify code";
+          syncVerify.textContent = "Sign in";
         });
     });
     if (syncNowBtn) syncNowBtn.addEventListener("click", function () {
@@ -1505,6 +1513,13 @@
       kvSet("enabled", !!syncAuto.checked);
       if (syncAuto.checked) scheduleAutoSync();
       renderSyncStatus();
+    });
+    // Enter submits the email / code field, so sign-in is a single keystroke.
+    if (syncEmail) syncEmail.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") { e.preventDefault(); if (syncSend) syncSend.click(); }
+    });
+    if (syncCode) syncCode.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") { e.preventDefault(); if (syncVerify) syncVerify.click(); }
     });
     if (syncReset) syncReset.addEventListener("click", function () {
       if (!confirm("Replace cloud data with this device's progress?")) return;
