@@ -132,3 +132,4 @@ read/unread checkboxes — the app starts empty for everyone, so personal
 progress never ships inside `seed.js`. Regenerating therefore never touches
 what you've logged in the browser (exports and history are unaffected); to
 move progress between browsers or devices, use **Export / Import** in Settings.
+
