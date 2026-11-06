@@ -10,8 +10,8 @@
 
   var STORE_KEY = "bible-tracker-v1";
   var SYNC_CONFIG = {
-    url: "https://kjlmkjkzbbnzdpvjhkxz.supabase.co",
-    key: "sb_publishable_5w93zJNuHD9GtNFy4x71ZQ_BgrEDm-1",
+    url: "https://yzvgkyljkcksbjufneuh.supabase.co",
+    key: "sb_publishable_FUpaVGdWuIw-5_eoJeaccw_BOYk8lrk",
     table: "sync_rows",
     domain: "state",
     externalId: "default",

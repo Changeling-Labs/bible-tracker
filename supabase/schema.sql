@@ -1,4 +1,4 @@
--- Bible Tracker — Supabase sync schema (reuses the shared sync_rows table).
+-- Bible Tracker — Supabase sync schema (project: yzvgkyljkcksbjufneuh).
 -- Idempotent: safe to re-run in the SQL editor. If you already applied the
 -- Pulse schema to this project, this only widens the domain check + RLS.
 --
