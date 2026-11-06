@@ -2,13 +2,14 @@
  * Same-origin requests always try the network first and fall back to the
  * cache, so app updates show up on reload instead of going stale. The cache
  * is only the offline safety net. Bump CACHE to evict old precaches. */
-var CACHE = "bible-tracker-v8";
+var CACHE = "bible-tracker-v9";
 var ASSETS = [
   "./",
   "./index.html",
   "./styles.css",
   "./app.js",
   "./seed.js",
+  "./vendor/supabase.js",
   "./manifest.webmanifest",
   "./icons/icon-192.png",
   "./icons/icon-512.png",

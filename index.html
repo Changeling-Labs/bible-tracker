@@ -55,6 +55,26 @@
     </div>
     <p class="hint" id="backupStatus"></p>
     <p class="hint">Progress auto-saves in this browser. Export a backup after big reading sessions.</p>
+
+    <div class="sync-section">
+      <h3>Cloud sync (Supabase)</h3>
+      <p class="hint">Sign in with a magic link to sync progress across your devices. Nothing leaves this device until you sign in.</p>
+      <div id="syncStatus" class="hint">Not signed in.</div>
+      <div class="settings-row">
+        <input type="email" id="syncEmail" placeholder="you@example.com" aria-label="Email for magic link" />
+        <button id="syncSendLink" class="btn ghost small">Send magic link</button>
+      </div>
+      <div class="settings-row">
+        <button id="syncNowBtn" class="btn primary small">Sync now</button>
+        <button id="syncSignOutBtn" class="btn ghost small">Sign out</button>
+      </div>
+      <label class="reminder-toggle">
+        <input type="checkbox" id="syncAuto" />
+        <span>Auto-sync on changes</span>
+      </label>
+      <p class="hint" id="syncDetail"></p>
+      <button id="syncResetCloud" class="btn danger-ghost small">Reset cloud to match this device</button>
+    </div>
   </div>
 </div>
 
@@ -167,6 +187,7 @@
   <p><a href="https://edmundashdown.github.io/privacy.html" style="color: var(--accent);">Privacy Policy</a></p>
 </footer>
 
+<script src="vendor/supabase.js"></script>
 <script src="seed.js"></script>
 <script src="app.js"></script>
 <script>

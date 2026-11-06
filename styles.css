@@ -226,6 +226,9 @@ select, input[type="search"] {
 .undo-toast #undoMsg { flex: 1; min-width: 0; }
 .undo-toast .btn { flex: 0 0 auto; }
 .storage-status { color: var(--muted); font-size: 12px; }
+.sync-section { margin-top: 16px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,.08); }
+.sync-section h3 { margin: 0 0 6px; font-size: 1rem; }
+.sync-section input[type="email"] { flex: 1; min-width: 0; padding: 6px 8px; border-radius: 6px; border: 1px solid rgba(255,255,255,.15); background: rgba(255,255,255,.05); color: inherit; }
 
 /* ---------- Plan + streams ---------- */
 .plan-grid { display: grid; grid-template-columns: 1.2fr 1fr; gap: 14px; margin-bottom: 14px; }

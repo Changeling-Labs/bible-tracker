@@ -9,6 +9,15 @@
   }
 
   var STORE_KEY = "bible-tracker-v1";
+  var SYNC_CONFIG = {
+    url: "https://kjlmkjkzbbnzdpvjhkxz.supabase.co",
+    key: "sb_publishable_5w93zJNuHD9GtNFy4x71ZQ_BgrEDm-1",
+    table: "sync_rows",
+    domain: "state",
+    externalId: "default",
+    storageKey: "bible-tracker-sync-auth"
+  };
+  var SYNC_KV_PREFIX = "bt-sync-";
 
   // Bible.com book codes — same mapping as the original spreadsheet formula:
   // first 3 letters (spaces removed, uppercased), with these exceptions.
@@ -164,6 +173,167 @@
       storeOK = false;
       renderStoreBanner();
     }
+    scheduleAutoSync();
+  }
+  function kvGet(k, fallback) {
+    try { var v = localStorage.getItem(SYNC_KV_PREFIX + k); return v === null ? fallback : JSON.parse(v); } catch (e) { return fallback; }
+  }
+  function kvSet(k, v) {
+    try { localStorage.setItem(SYNC_KV_PREFIX + k, JSON.stringify(v)); } catch (e) {}
+  }
+  function supabaseClient() {
+    if (window.__btSupabase) return window.__btSupabase;
+    var factory = window.supabase && window.supabase.createClient;
+    if (typeof factory !== "function") throw new Error("Supabase library not loaded — reload the page");
+    var c = factory(SYNC_CONFIG.url, SYNC_CONFIG.key, {
+      auth: { autoRefreshToken: true, persistSession: true, detectSessionInUrl: true, storageKey: SYNC_CONFIG.storageKey }
+    });
+    window.__btSupabase = c;
+    return c;
+  }
+  function getSession() {
+    try { return supabaseClient().auth.getSession().then(function (r) { return (r && r.data && r.data.session) || null; }); }
+    catch (e) { return Promise.resolve(null); }
+  }
+  var autoSyncTimer = null;
+  function scheduleAutoSync() {
+    if (autoSyncTimer) clearTimeout(autoSyncTimer);
+    autoSyncTimer = setTimeout(function () { autoSyncTimer = null; autoSyncIfEligible(); }, 2500);
+  }
+  function autoSyncIfEligible() {
+    try {
+      if (typeof navigator !== "undefined" && navigator.onLine === false) return;
+      if (!kvGet("enabled", false)) return;
+      getSession().then(function (session) {
+        if (!session) return;
+        syncNow().catch(function (err) { console.warn("auto sync failed", err); });
+      }).catch(function () {});
+    } catch (e) {}
+  }
+  function loadStateFromObject(obj) {
+    // Reuse loadState logic by stringifying into localStorage? Simpler: parse manually.
+    var st = defaultState();
+    if (!obj || typeof obj !== "object") return st;
+    if (obj.read) {
+      Object.keys(st.read).forEach(function (name) {
+        if (Array.isArray(obj.read[name]) && obj.read[name].length === st.read[name].length) {
+          st.read[name] = obj.read[name].map(Boolean);
+        }
+      });
+    }
+    var hist = cleanHistory(obj.history);
+    if (hist.length) st.history = hist.slice(0, HISTORY_CAP);
+    if (obj.days) validDayCounts(obj.days, st.days);
+    if (obj.bookLast) st.bookLast = validLastReads(obj.bookLast);
+    if ((!obj.days || !obj.bookLast) && hist.length) {
+      var derived = talliesFromHistory(hist);
+      if (!obj.days) st.days = derived.days;
+      if (!obj.bookLast) st.bookLast = derived.bookLast;
+    }
+    if (typeof obj.translation === "string" && validTranslation(obj.translation)) st.translation = obj.translation;
+    if (obj.plan && (obj.plan.target === null || typeof obj.plan.target === "string")) st.plan = { target: obj.plan.target || null };
+    if (obj.notes && typeof obj.notes === "object") {
+      Object.keys(obj.notes).forEach(function (k) {
+        var n = obj.notes[k];
+        if (n && typeof n.t === "string") st.notes[k] = { t: n.t.slice(0, 2000), s: !!n.s, u: +n.u || 0 };
+      });
+    }
+    if (obj.notif && typeof obj.notif === "object") {
+      if (typeof obj.notif.time === "string" && /^\d\d:\d\d/.test(obj.notif.time)) st.notif.time = obj.notif.time;
+      st.notif.enabled = !!obj.notif.enabled;
+      if (typeof obj.notif.last === "string") st.notif.last = obj.notif.last;
+    }
+    if (+obj.savedAt) st.savedAt = +obj.savedAt;
+    if (!st.savedAt) st.savedAt = Date.now();
+    return st;
+  }
+  async function syncNow() {
+    try {
+      var session = await getSession();
+      if (!session) throw new Error("Sign in with the magic link first.");
+    var userId = session.user.id;
+    // Pull remote first to avoid clobbering newer data.
+    var pullRes = await supabaseClient().from(SYNC_CONFIG.table).select("*")
+      .eq("domain", SYNC_CONFIG.domain).eq("external_id", SYNC_CONFIG.externalId);
+    if (pullRes.error) throw new Error("sync pull failed: " + pullRes.error.message);
+    var rows = pullRes.data || [];
+    var row = rows.length ? rows[0] : null;
+    if (row && row.updated_at) {
+      var remoteMs = Date.parse(row.updated_at);
+      var localMs = state.savedAt || 0;
+      if (Number.isFinite(remoteMs) && remoteMs > localMs) {
+        state = loadStateFromObject(row.payload);
+        try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); } catch (e) {}
+        render();
+      }
+    }
+    // Push local state.
+    var updatedAt = new Date(state.savedAt || Date.now()).toISOString();
+    var up = await supabaseClient().from(SYNC_CONFIG.table).upsert({
+      user_id: userId,
+      domain: SYNC_CONFIG.domain,
+      external_id: SYNC_CONFIG.externalId,
+      payload: state,
+      updated_at: updatedAt,
+      deleted_at: null
+    }, { onConflict: "user_id,domain,external_id" });
+    if (up.error) throw new Error("sync push failed: " + up.error.message);
+    kvSet("lastSyncAt", new Date().toISOString());
+    kvSet("lastError", null);
+    kvSet("enabled", true);
+    renderSyncStatus();
+    return { ok: true };
+    } catch (err) {
+      var msg = err && err.message ? err.message : String(err);
+      kvSet("lastError", msg);
+      renderSyncStatus();
+      throw err;
+    }
+  }
+  async function sendMagicLink(email) {
+    var clean = String(email || "").trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(clean)) throw new Error("That email does not look valid.");
+    var redirectTo = window.location.origin + window.location.pathname;
+    var r = await supabaseClient().auth.signInWithOtp({ email: clean, options: { emailRedirectTo: redirectTo } });
+    if (r.error) throw new Error(r.error.message);
+    return clean;
+  }
+  async function signOutSync() {
+    var r = await supabaseClient().auth.signOut();
+    if (r.error) throw new Error(r.error.message);
+  }
+  async function resetCloudToLocal() {
+    var session = await getSession();
+    if (!session) throw new Error("Sign in first.");
+    var del = await supabaseClient().from(SYNC_CONFIG.table).delete()
+      .eq("domain", SYNC_CONFIG.domain).eq("external_id", SYNC_CONFIG.externalId);
+    if (del.error) throw new Error(del.error.message);
+    kvSet("lastPushAt", null);
+    await syncNow();
+  }
+  function renderSyncStatus() {
+    var el = document.getElementById("syncStatus");
+    var detail = document.getElementById("syncDetail");
+    if (!el) return;
+    getSession().then(function (session) {
+      if (session) {
+        el.textContent = "Signed in as " + (session.user.email || session.user.id);
+      } else {
+        el.textContent = "Not signed in.";
+      }
+      var lastSyncAt = kvGet("lastSyncAt", null);
+      var lastError = kvGet("lastError", null);
+      var auto = kvGet("enabled", false);
+      var autoBox = document.getElementById("syncAuto");
+      if (autoBox) autoBox.checked = !!auto;
+      if (detail) {
+        var parts = [];
+        if (lastSyncAt) parts.push("Last sync " + relTime(Date.parse(lastSyncAt)));
+        if (lastError) parts.push("Error: " + lastError);
+        if (!parts.length) parts.push("No sync yet.");
+        detail.textContent = parts.join(" · ");
+      }
+    }).catch(function () {});
   }
   function noteKey(book, ch) { return book + "|" + ch; }
 
@@ -1142,11 +1312,47 @@
       syncFilterInputs(); syncTranslationSelect(); syncNotif();
       render();
     });
+    // Cloud sync controls
+    var syncEmail = $("syncEmail");
+    var syncSend = $("syncSendLink");
+    var syncNowBtn = $("syncNowBtn");
+    var syncSignOut = $("syncSignOutBtn");
+    var syncAuto = $("syncAuto");
+    var syncReset = $("syncResetCloud");
+    if (syncSend) syncSend.addEventListener("click", function () {
+      sendMagicLink(syncEmail ? syncEmail.value : "").then(function (email) {
+        alert("Magic link sent to " + email + ". Open it on this device to sign in.");
+        renderSyncStatus();
+      }).catch(function (err) { alert(err.message || String(err)); });
+    });
+    if (syncNowBtn) syncNowBtn.addEventListener("click", function () {
+      syncNow().then(function () { alert("Synced ✓"); render(); }).catch(function (err) { alert(err.message || String(err)); renderSyncStatus(); });
+    });
+    if (syncSignOut) syncSignOut.addEventListener("click", function () {
+      signOutSync().then(function () { kvSet("enabled", false); renderSyncStatus(); alert("Signed out."); }).catch(function (err) { alert(err.message || String(err)); });
+    });
+    if (syncAuto) syncAuto.addEventListener("change", function () {
+      kvSet("enabled", !!syncAuto.checked);
+      if (syncAuto.checked) scheduleAutoSync();
+      renderSyncStatus();
+    });
+    if (syncReset) syncReset.addEventListener("click", function () {
+      if (!confirm("Replace cloud data with this device's progress?")) return;
+      resetCloudToLocal().then(function (r) { alert("Cloud reset; re-uploaded " + (r && r.deleted ? r.deleted : 0) + " rows."); }).catch(function (err) { alert(err.message || String(err)); });
+    });
+    // auto-sync listeners
+    if (typeof document !== "undefined" && !window.__btSyncListeners) {
+      window.__btSyncListeners = true;
+      if (typeof document.addEventListener === "function") document.addEventListener("visibilitychange", function () { if (document.visibilityState === "visible") scheduleAutoSync(); });
+      if (typeof window !== "undefined" && typeof window.addEventListener === "function") window.addEventListener("online", function () { scheduleAutoSync(); });
+    }
+    renderSyncStatus();
     $("undoBtn").addEventListener("click", function () { undoBulk(); });
   }
 
   initControls();
   render();
+  getSession().then(function (s) { renderSyncStatus(); if (s && kvGet("enabled", false)) scheduleAutoSync(); }).catch(function () {});
   // Test-only hooks: only exposed when the page is booted with window.__BT_TEST,
   // so production builds keep their private scope.
   if (typeof window !== "undefined" && window.__BT_TEST) {
@@ -1155,7 +1361,13 @@
       undoBulk: undoBulk,
       logAndToggle: logAndToggle,
       clearUndo: clearUndo,
-      rangeAnchor: rangeAnchor
+      rangeAnchor: rangeAnchor,
+      syncNow: syncNow,
+      sendMagicLink: sendMagicLink,
+      getSession: getSession,
+      kvGet: kvGet,
+      kvSet: kvSet,
+      loadStateFromObject: loadStateFromObject
     };
   }
 })();
