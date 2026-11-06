@@ -9,7 +9,7 @@
   }
 
   var STORE_KEY = "bible-tracker-v1";
-  var APP_VERSION = "1.1.2";
+  var APP_VERSION = "1.1.3";
   var SYNC_CONFIG = {
     url: "https://yzvgkyljkcksbjufneuh.supabase.co",
     key: "sb_publishable_FUpaVGdWuIw-5_eoJeaccw_BOYk8lrk",
@@ -381,13 +381,30 @@
     var detail = document.getElementById("syncDetail");
     if (!el) return;
     getSession().then(function (session) {
-      if (session) {
-        el.textContent = "Signed in as " + (session.user.email || session.user.id);
-      } else {
-        el.textContent = "Not signed in.";
-      }
+      var signedIn = !!session;
+      el.textContent = signedIn
+        ? "✓ Signed in as " + (session.user.email || session.user.id)
+        : "Not signed in.";
+      if (el.classList && el.classList.toggle) el.classList.toggle("signed-in", signedIn);
+      // Signed in: hide the email/magic-link controls. Signed out: hide the
+      // sync/sign-out actions that would only fail.
+      var signinRow = document.getElementById("syncSigninRow");
+      if (signinRow) signinRow.hidden = signedIn;
+      var actionsRow = document.getElementById("syncActionsRow");
+      if (actionsRow) actionsRow.hidden = !signedIn;
+      var resetBtn = document.getElementById("syncResetCloud");
+      if (resetBtn) resetBtn.hidden = !signedIn;
+      var intro = document.getElementById("syncIntro");
+      if (intro) intro.textContent = signedIn
+        ? "Progress syncs across your devices while you're signed in. It still saves locally and works offline."
+        : "Sign in with a magic link to sync progress across your devices. Nothing leaves this device until you sign in.";
       var lastSyncAt = kvGet("lastSyncAt", null);
       var lastError = kvGet("lastError", null);
+      // A successful sign-in should not keep showing an old magic-link failure.
+      if (signedIn && lastError && String(lastError).indexOf("Magic link failed") === 0) {
+        lastError = null;
+        kvSet("lastError", null);
+      }
       var auto = kvGet("enabled", false);
       var autoBox = document.getElementById("syncAuto");
       if (autoBox) autoBox.checked = !!auto;
