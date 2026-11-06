@@ -9,7 +9,7 @@
   }
 
   var STORE_KEY = "bible-tracker-v1";
-  var APP_VERSION = "1.1.5";
+  var APP_VERSION = "1.1.6";
   var SYNC_CONFIG = {
     url: "https://yzvgkyljkcksbjufneuh.supabase.co",
     key: "sb_publishable_FUpaVGdWuIw-5_eoJeaccw_BOYk8lrk",
@@ -377,16 +377,24 @@
     if (r.error) throw new Error(r.error.message);
     return clean;
   }
-  // Verify the 6-digit code from the same email. Unlike the link, this runs in
+  // Verify the sign-in code from the same email. Unlike the link, this runs in
   // whichever context the app is installed in (Safari tab, Dock web app,
   // iPhone home-screen app), which each have their own storage.
   async function verifyEmailCode(email, code) {
     var clean = String(email || "").trim().toLowerCase();
     var token = String(code || "").replace(/\D/g, "");
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(clean)) throw new Error("Enter the email you requested the code for.");
-    if (!/^\d{6}$/.test(token)) throw new Error("Enter the 6-digit code from the email.");
+    // OTP length is a Supabase setting (6–10 digits), not always 6. Accept a
+    // range and let the server be the authority.
+    if (!/^\d{6,10}$/.test(token)) throw new Error("Enter the code from the email (6–10 digits).");
     var r = await supabaseClient().auth.verifyOtp({ email: clean, token: token, type: "email" });
-    if (r.error) throw new Error(r.error.message);
+    if (r.error) {
+      var msg = r.error.message || "Could not verify that code.";
+      if (/expired|invalid/i.test(msg)) {
+        throw new Error(msg.replace(/\.$/, "") + ". Request a fresh code and use only the code in the newest email — don't click its link, as that can consume the code.");
+      }
+      throw new Error(msg);
+    }
     kvSet("lastError", null);
     return true;
   }
@@ -424,7 +432,7 @@
       var intro = document.getElementById("syncIntro");
       if (intro) intro.textContent = signedIn
         ? "Progress syncs across your devices while you're signed in. It still saves locally and works offline."
-        : "Sign in to sync progress across devices. We'll email you a 6-digit code — it works here, even in the installed app.";
+        : "Sign in to sync progress across devices. We'll email you a sign-in code — it works here, even in the installed app.";
       var lastSyncAt = kvGet("lastSyncAt", null);
       var lastError = kvGet("lastError", null);
       // A successful sign-in should not keep showing an old magic-link failure.
@@ -1466,7 +1474,7 @@
         syncSend.disabled = true;
         syncSend.textContent = "Sending…";
         sendMagicLink(syncEmail ? syncEmail.value : "").then(function (email) {
-          alert("We emailed a 6-digit code to " + email + ". Enter it below to sign in.");
+          alert("We emailed a sign-in code to " + email + ". Enter it below to sign in.");
           if (syncCode && syncCode.focus) syncCode.focus();
           renderSyncStatus();
         }).catch(function (err) { alert(err.message || String(err)); })

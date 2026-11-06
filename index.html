@@ -59,7 +59,7 @@
 
     <div class="sync-section">
       <h3>Cloud sync (Supabase)</h3>
-      <p class="hint" id="syncIntro">Sign in to sync progress across devices. We'll email you a 6-digit code — it works here, even in the installed app.</p>
+      <p class="hint" id="syncIntro">Sign in to sync progress across devices. We'll email you a sign-in code — it works here, even in the installed app.</p>
       <div id="syncStatus" class="sync-status">Not signed in.</div>
       <div id="syncSigninRow">
         <div class="settings-row">
@@ -67,7 +67,7 @@
           <button id="syncSendLink" class="btn ghost small">Send code</button>
         </div>
         <div class="settings-row" id="syncCodeRow">
-          <input type="text" id="syncCode" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="Enter 6-digit code" aria-label="Email sign-in code" />
+          <input type="text" id="syncCode" inputmode="numeric" autocomplete="one-time-code" maxlength="10" placeholder="Enter code" aria-label="Email sign-in code" />
           <button id="syncVerifyCode" class="btn primary small">Sign in</button>
         </div>
       </div>
