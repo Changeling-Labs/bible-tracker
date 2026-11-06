@@ -9,7 +9,7 @@
   }
 
   var STORE_KEY = "bible-tracker-v1";
-  var APP_VERSION = "1.1.1";
+  var APP_VERSION = "1.1.2";
   var SYNC_CONFIG = {
     url: "https://yzvgkyljkcksbjufneuh.supabase.co",
     key: "sb_publishable_FUpaVGdWuIw-5_eoJeaccw_BOYk8lrk",
@@ -220,6 +220,37 @@
       if (params.error) return params.error + (params.error_code ? " (" + params.error_code + ")" : "");
     } catch (e) {}
     return null;
+  }
+  // Newer, scanner-proof magic links put a one-time token hash in the query
+  // string (?token_hash=...&type=email) instead of routing through Supabase's
+  // /verify endpoint. We exchange it here in JS, so email link scanners that
+  // fetch the URL do not consume the token before the user clicks.
+  function handleEmailTokenHash() {
+    try {
+      if (!window.location || typeof window.URLSearchParams !== "function") return Promise.resolve(null);
+      var params = new window.URLSearchParams(window.location.search || "");
+      var tokenHash = params.get("token_hash");
+      var type = params.get("type");
+      if (!tokenHash || !type) return Promise.resolve(null);
+      var strip = function () {
+        try {
+          var rest = String(window.location.search || "").replace(/^\?/, "").split("&").filter(function (pair) {
+            return pair && pair.indexOf("token_hash=") !== 0 && pair.indexOf("type=") !== 0;
+          }).join("&");
+          history.replaceState(history.state, "", window.location.pathname + (rest ? "?" + rest : "") + window.location.hash);
+        } catch (e) {}
+      };
+      return supabaseClient().auth.verifyOtp({ token_hash: tokenHash, type: type }).then(function (r) {
+        strip();
+        if (r && r.error) throw r.error;
+        return (r && r.data && r.data.session) || null;
+      }, function (err) {
+        strip();
+        throw err;
+      });
+    } catch (e) {
+      return Promise.reject(e);
+    }
   }
   function getSession() {
     try { return supabaseClient().auth.getSession().then(function (r) { return (r && r.data && r.data.session) || null; }); }
@@ -1429,7 +1460,13 @@
   initControls();
   render();
   renderVersionStatus();
-  getSession().then(function (s) {
+  // Consume a scanner-proof token-hash link first, then read the session.
+  // (No-op when the email still uses the default {{ .ConfirmationURL }}.)
+  handleEmailTokenHash().catch(function (err) {
+    kvSet("lastError", "Magic link failed: " + (err && err.message ? err.message : String(err)));
+  }).then(function () {
+    return getSession();
+  }).then(function (s) {
     renderSyncStatus();
     if (s && kvGet("enabled", false)) scheduleAutoSync();
     // If the magic link was rejected, Supabase leaves the reason in the hash.
