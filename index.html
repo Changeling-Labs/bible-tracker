@@ -61,9 +61,15 @@
       <h3>Cloud sync (Supabase)</h3>
       <p class="hint" id="syncIntro">Sign in with a magic link to sync progress across your devices. Nothing leaves this device until you sign in.</p>
       <div id="syncStatus" class="sync-status">Not signed in.</div>
-      <div class="settings-row" id="syncSigninRow">
-        <input type="email" id="syncEmail" placeholder="you@example.com" aria-label="Email for magic link" />
-        <button id="syncSendLink" class="btn ghost small">Send magic link</button>
+      <div id="syncSigninRow">
+        <div class="settings-row">
+          <input type="email" id="syncEmail" placeholder="you@example.com" aria-label="Email for magic link" />
+          <button id="syncSendLink" class="btn ghost small">Send magic link</button>
+        </div>
+        <div class="settings-row" id="syncCodeRow">
+          <input type="text" id="syncCode" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="6-digit code" aria-label="Email verification code" />
+          <button id="syncVerifyCode" class="btn primary small">Verify code</button>
+        </div>
       </div>
       <div class="settings-row" id="syncActionsRow">
         <button id="syncNowBtn" class="btn primary small">Sync now</button>

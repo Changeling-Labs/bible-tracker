@@ -9,7 +9,7 @@
   }
 
   var STORE_KEY = "bible-tracker-v1";
-  var APP_VERSION = "1.1.3";
+  var APP_VERSION = "1.1.4";
   var SYNC_CONFIG = {
     url: "https://yzvgkyljkcksbjufneuh.supabase.co",
     key: "sb_publishable_FUpaVGdWuIw-5_eoJeaccw_BOYk8lrk",
@@ -308,6 +308,20 @@
     if (!st.savedAt) st.savedAt = Date.now();
     return st;
   }
+  // True once this device has logged anything. A brand-new install (Safari
+  // web app, new phone) starts empty; syncing must pull the cloud copy rather
+  // than push that emptiness over it, even if it was opened later.
+  function localHasProgress() {
+    try {
+      if ((state.history && state.history.length) || (state.days && Object.keys(state.days).length) || (state.notes && Object.keys(state.notes).length)) return true;
+      var names = Object.keys(state.read || {});
+      for (var i = 0; i < names.length; i++) {
+        var arr = state.read[names[i]];
+        if (arr && arr.some(Boolean)) return true;
+      }
+    } catch (e) {}
+    return false;
+  }
   async function syncNow() {
     try {
       var session = await getSession();
@@ -322,7 +336,7 @@
     if (row && row.updated_at) {
       var remoteMs = Date.parse(row.updated_at);
       var localMs = state.savedAt || 0;
-      if (Number.isFinite(remoteMs) && remoteMs > localMs) {
+      if (Number.isFinite(remoteMs) && (remoteMs > localMs || !localHasProgress())) {
         state = loadStateFromObject(row.payload);
         try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); } catch (e) {}
         render();
@@ -362,6 +376,19 @@
     var r = await supabaseClient().auth.signInWithOtp({ email: clean, options: { emailRedirectTo: redirectTo } });
     if (r.error) throw new Error(r.error.message);
     return clean;
+  }
+  // Verify the 6-digit code from the same email. Unlike the link, this runs in
+  // whichever context the app is installed in (Safari tab, Dock web app,
+  // iPhone home-screen app), which each have their own storage.
+  async function verifyEmailCode(email, code) {
+    var clean = String(email || "").trim().toLowerCase();
+    var token = String(code || "").replace(/\D/g, "");
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(clean)) throw new Error("Enter the email you requested the code for.");
+    if (!/^\d{6}$/.test(token)) throw new Error("Enter the 6-digit code from the email.");
+    var r = await supabaseClient().auth.verifyOtp({ email: clean, token: token, type: "email" });
+    if (r.error) throw new Error(r.error.message);
+    kvSet("lastError", null);
+    return true;
   }
   async function signOutSync() {
     var r = await supabaseClient().auth.signOut();
@@ -1417,6 +1444,8 @@
     // Cloud sync controls
     var syncEmail = $("syncEmail");
     var syncSend = $("syncSendLink");
+    var syncCode = $("syncCode");
+    var syncVerify = $("syncVerifyCode");
     var syncNowBtn = $("syncNowBtn");
     var syncSignOut = $("syncSignOutBtn");
     var syncAuto = $("syncAuto");
@@ -1438,7 +1467,7 @@
         syncSend.disabled = true;
         syncSend.textContent = "Sending…";
         sendMagicLink(syncEmail ? syncEmail.value : "").then(function (email) {
-          alert("Magic link sent to " + email + ". Open it on this device to sign in.");
+          alert("Code sent to " + email + ".\n\nEasiest on every device (including this installed app): type the 6-digit code from the email below. The link also works in a normal browser tab.");
           renderSyncStatus();
         }).catch(function (err) { alert(err.message || String(err)); })
           .finally(function () {
@@ -1448,11 +1477,29 @@
           });
       });
     }
+    if (syncVerify) syncVerify.addEventListener("click", function () {
+      syncVerify.disabled = true;
+      syncVerify.textContent = "Verifying…";
+      verifyEmailCode(syncEmail ? syncEmail.value : "", syncCode ? syncCode.value : "").then(function () {
+        if (syncCode) syncCode.value = "";
+        alert("Signed in ✓");
+        renderSyncStatus();
+      }).catch(function (err) { alert(err.message || String(err)); renderSyncStatus(); })
+        .finally(function () {
+          syncVerify.disabled = false;
+          syncVerify.textContent = "Verify code";
+        });
+    });
     if (syncNowBtn) syncNowBtn.addEventListener("click", function () {
       syncNow().then(function () { alert("Synced ✓"); render(); }).catch(function (err) { alert(err.message || String(err)); renderSyncStatus(); });
     });
     if (syncSignOut) syncSignOut.addEventListener("click", function () {
-      signOutSync().then(function () { kvSet("enabled", false); renderSyncStatus(); alert("Signed out."); }).catch(function (err) { alert(err.message || String(err)); });
+      signOutSync().then(function () {
+        kvSet("enabled", false);
+        if (syncCode) syncCode.value = "";
+        renderSyncStatus();
+        alert("Signed out.");
+      }).catch(function (err) { alert(err.message || String(err)); });
     });
     if (syncAuto) syncAuto.addEventListener("change", function () {
       kvSet("enabled", !!syncAuto.checked);
