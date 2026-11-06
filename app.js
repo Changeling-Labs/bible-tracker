@@ -9,7 +9,7 @@
   }
 
   var STORE_KEY = "bible-tracker-v1";
-  var APP_VERSION = "1.1.0";
+  var APP_VERSION = "1.1.1";
   var SYNC_CONFIG = {
     url: "https://yzvgkyljkcksbjufneuh.supabase.co",
     key: "sb_publishable_FUpaVGdWuIw-5_eoJeaccw_BOYk8lrk",
@@ -189,8 +189,37 @@
     var c = factory(SYNC_CONFIG.url, SYNC_CONFIG.key, {
       auth: { autoRefreshToken: true, persistSession: true, detectSessionInUrl: true, storageKey: SYNC_CONFIG.storageKey }
     });
+    // Magic-link sign-in is detected asynchronously while the client boots, so
+    // a one-shot getSession() can land before it. Re-render whenever auth
+    // state changes so the UI reflects a link just clicked.
+    try {
+      c.auth.onAuthStateChange(function (event) {
+        if (event === "SIGNED_IN" || event === "SIGNED_OUT" || event === "TOKEN_REFRESHED" || event === "USER_UPDATED") {
+          renderSyncStatus();
+          if (event === "SIGNED_IN" && kvGet("enabled", false)) scheduleAutoSync();
+        }
+      });
+    } catch (e) {}
     window.__btSupabase = c;
     return c;
+  }
+  // Supabase leaves error details in the URL hash when a magic link is bad
+  // (expired, already used, wrong redirect). Surface them instead of silently
+  // rendering "Not signed in".
+  function authUrlError() {
+    try {
+      var hash = String(window.location.hash || "").replace(/^#/, "");
+      if (!hash) return null;
+      var params = {};
+      hash.split("&").forEach(function (pair) {
+        var i = pair.indexOf("=");
+        if (i === -1) return;
+        params[decodeURIComponent(pair.slice(0, i))] = decodeURIComponent(pair.slice(i + 1).replace(/\+/g, " "));
+      });
+      if (params.error_description) return params.error_description;
+      if (params.error) return params.error + (params.error_code ? " (" + params.error_code + ")" : "");
+    } catch (e) {}
+    return null;
   }
   function getSession() {
     try { return supabaseClient().auth.getSession().then(function (r) { return (r && r.data && r.data.session) || null; }); }
@@ -294,7 +323,11 @@
   async function sendMagicLink(email) {
     var clean = String(email || "").trim().toLowerCase();
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(clean)) throw new Error("That email does not look valid.");
-    var redirectTo = window.location.origin + window.location.pathname;
+    // Always land back on the app directory, not a filename: Supabase only
+    // accepts redirect URLs that match the allowlist exactly. Visiting
+    // /bible-tracker/index.html must still produce /bible-tracker/ so the
+    // magic link is accepted.
+    var redirectTo = window.location.origin + window.location.pathname.replace(/[^/]*$/, "");
     var r = await supabaseClient().auth.signInWithOtp({ email: clean, options: { emailRedirectTo: redirectTo } });
     if (r.error) throw new Error(r.error.message);
     return clean;
@@ -1340,12 +1373,33 @@
     var syncSignOut = $("syncSignOutBtn");
     var syncAuto = $("syncAuto");
     var syncReset = $("syncResetCloud");
-    if (syncSend) syncSend.addEventListener("click", function () {
-      sendMagicLink(syncEmail ? syncEmail.value : "").then(function (email) {
-        alert("Magic link sent to " + email + ". Open it on this device to sign in.");
-        renderSyncStatus();
-      }).catch(function (err) { alert(err.message || String(err)); });
-    });
+    if (syncSend) {
+      // Supabase free tier allows only 2 magic-link emails per hour per project,
+      // so throttle client-side to avoid burning the quota on rapid retries.
+      // Persisted so a page reload can't bypass the wait.
+      var COOLDOWN_KEY = "magicCooldownUntil";
+      var SEND_COOLDOWN_MS = 30 * 60 * 1000; // 30 minutes
+      syncSend.addEventListener("click", function () {
+        var now = Date.now();
+        var cooldownUntil = +kvGet(COOLDOWN_KEY, 0) || 0;
+        if (now < cooldownUntil) {
+          var waitMin = Math.ceil((cooldownUntil - now) / 60000);
+          alert("Please wait " + waitMin + " minute(s) before sending another magic link (Supabase free tier allows 2 emails/hour).");
+          return;
+        }
+        syncSend.disabled = true;
+        syncSend.textContent = "Sending…";
+        sendMagicLink(syncEmail ? syncEmail.value : "").then(function (email) {
+          alert("Magic link sent to " + email + ". Open it on this device to sign in.");
+          renderSyncStatus();
+        }).catch(function (err) { alert(err.message || String(err)); })
+          .finally(function () {
+            syncSend.disabled = false;
+            syncSend.textContent = "Send magic link";
+            kvSet(COOLDOWN_KEY, Date.now() + SEND_COOLDOWN_MS);
+          });
+      });
+    }
     if (syncNowBtn) syncNowBtn.addEventListener("click", function () {
       syncNow().then(function () { alert("Synced ✓"); render(); }).catch(function (err) { alert(err.message || String(err)); renderSyncStatus(); });
     });
@@ -1375,7 +1429,18 @@
   initControls();
   render();
   renderVersionStatus();
-  getSession().then(function (s) { renderSyncStatus(); if (s && kvGet("enabled", false)) scheduleAutoSync(); }).catch(function () {});
+  getSession().then(function (s) {
+    renderSyncStatus();
+    if (s && kvGet("enabled", false)) scheduleAutoSync();
+    // If the magic link was rejected, Supabase leaves the reason in the hash.
+    // Show it, then clean the URL so a refresh doesn't keep erroring.
+    var linkErr = s ? null : authUrlError();
+    if (linkErr) {
+      kvSet("lastError", "Magic link failed: " + linkErr);
+      try { history.replaceState(history.state, "", window.location.pathname + window.location.search); } catch (e) {}
+      renderSyncStatus();
+    }
+  }).catch(function () {});
   // Test-only hooks: only exposed when the page is booted with window.__BT_TEST,
   // so production builds keep their private scope.
   if (typeof window !== "undefined" && window.__BT_TEST) {
