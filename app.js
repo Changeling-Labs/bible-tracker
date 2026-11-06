@@ -9,6 +9,7 @@
   }
 
   var STORE_KEY = "bible-tracker-v1";
+  var APP_VERSION = "1.1.0";
   var SYNC_CONFIG = {
     url: "https://yzvgkyljkcksbjufneuh.supabase.co",
     key: "sb_publishable_FUpaVGdWuIw-5_eoJeaccw_BOYk8lrk",
@@ -334,6 +335,26 @@
         detail.textContent = parts.join(" · ");
       }
     }).catch(function () {});
+  }
+  function renderVersionStatus() {
+    var el = document.getElementById("versionStatus");
+    if (!el) return;
+    var text = "Version " + APP_VERSION;
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.getRegistration().then(function (reg) {
+        if (!reg) { if (el) el.textContent = text + " · service worker not registered"; return; }
+        if (reg.waiting) {
+          el.innerHTML = text + " · <strong>a new version is ready</strong> — " +
+            '<button class="btn primary small" id="versionReload">Reload</button>';
+          var btn = document.getElementById("versionReload");
+          if (btn) btn.addEventListener("click", function () { location.reload(); });
+        } else {
+          el.textContent = text + " · up to date";
+        }
+      }).catch(function () { el.textContent = text; });
+    } else {
+      el.textContent = text;
+    }
   }
   function noteKey(book, ch) { return book + "|" + ch; }
 
@@ -1347,11 +1368,13 @@
       if (typeof window !== "undefined" && typeof window.addEventListener === "function") window.addEventListener("online", function () { scheduleAutoSync(); });
     }
     renderSyncStatus();
+    renderVersionStatus();
     $("undoBtn").addEventListener("click", function () { undoBulk(); });
   }
 
   initControls();
   render();
+  renderVersionStatus();
   getSession().then(function (s) { renderSyncStatus(); if (s && kvGet("enabled", false)) scheduleAutoSync(); }).catch(function () {});
   // Test-only hooks: only exposed when the page is booted with window.__BT_TEST,
   // so production builds keep their private scope.
