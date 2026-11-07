@@ -9,7 +9,7 @@
   }
 
   var STORE_KEY = "bible-tracker-v1";
-  var APP_VERSION = "1.1.6";
+  var APP_VERSION = "1.1.7";
   var SYNC_CONFIG = {
     url: "https://yzvgkyljkcksbjufneuh.supabase.co",
     key: "sb_publishable_FUpaVGdWuIw-5_eoJeaccw_BOYk8lrk",
@@ -1576,6 +1576,8 @@
       rangeAnchor: rangeAnchor,
       syncNow: syncNow,
       sendMagicLink: sendMagicLink,
+      verifyEmailCode: verifyEmailCode,
+      localHasProgress: localHasProgress,
       getSession: getSession,
       kvGet: kvGet,
       kvSet: kvSet,

@@ -2,7 +2,7 @@
  * Same-origin requests always try the network first and fall back to the
  * cache, so app updates show up on reload instead of going stale. The cache
  * is only the offline safety net. Bump CACHE to evict old precaches. */
-var CACHE = "bible-tracker-v16";
+var CACHE = "bible-tracker-v17";
 var ASSETS = [
   "./",
   "./index.html",
@@ -38,7 +38,11 @@ self.addEventListener("fetch", function (e) {
   // Never intercept cross-origin traffic (Bible.com links, etc.).
   if (url.origin !== location.origin) return;
   e.respondWith(
-    fetch(e.request).then(function (res) {
+    // `cache: "reload"` bypasses the browser HTTP cache. GitHub Pages serves
+    // assets with max-age=600, so without it a "network-first" worker could
+    // still hand back a stale app.js after a deploy. The Cache API below is
+    // still the offline fallback.
+    fetch(e.request, { cache: "reload" }).then(function (res) {
       if (res && res.ok) {
         var copy = res.clone();
         caches.open(CACHE).then(function (c) { c.put(e.request, copy); });

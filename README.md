@@ -99,8 +99,10 @@ wraps the test command. It loads the app into a small DOM stub and asserts the
 things that are easy to break by accident: the seed still describes all 66
 books / 1,189 chapters / 74 translations **and ships no reading progress**, the
 service worker precaches every file it names, a fresh install boots empty, a
-store saved by an older version still loads, and stats survive past the
-500-event history cap. Run it before committing.
+store saved by an older version still loads, stats survive past the
+500-event history cap, and (with a mocked Supabase client) cloud sync pulls or
+pushes correctly and the email-code sign-in sends what Supabase expects. Run it
+before committing.
 
 ## Files
 

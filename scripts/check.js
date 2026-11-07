@@ -10,7 +10,9 @@
  *     lists actually exists,
  *   - a fresh install boots completely empty (the whole point of the app),
  *   - a store saved by an older version still loads,
- *   - and stats survive past the 500-event history cap.
+ *   - stats survive past the 500-event history cap, and
+ *   - (with a mocked Supabase client) sync pulls/pushes correctly and the
+ *     email-code sign-in sends the right payload.
  *
  * The app is loaded into a tiny DOM stub, so this runs in plain Node.
  */
@@ -160,7 +162,8 @@ function makeDom() {
 }
 
 // Boot app.js against a fake store. Returns the DOM plus a view of what the app saved.
-function boot(store) {
+function boot(store, opts) {
+  opts = opts || {};
   var appSrc = read("app.js");
   var doc = makeDom();
   var kv = new Map();
@@ -170,8 +173,9 @@ function boot(store) {
     setItem: function (k, v) { kv.set(k, String(v)); },
     removeItem: function (k) { kv.delete(k); }
   };
-  var location = { protocol: "https:", host: "example.test", pathname: "/index.html", href: "https://example.test/index.html" };
-  var win = { BIBLE_SEED: SEED, __BT_TEST: true };
+  var location = { origin: "https://example.test", protocol: "https:", host: "example.test", pathname: "/index.html", search: "", hash: "", href: "https://example.test/index.html" };
+  var win = { BIBLE_SEED: SEED, __BT_TEST: true, location: location };
+  if (opts.supabase) win.supabase = opts.supabase;
   var fn = new Function(
     "window", "document", "localStorage", "location", "CSS",
     "setInterval", "clearInterval", "Notification", appSrc
@@ -414,6 +418,134 @@ ok("range leaves 6 unread", rs2.read.Exodus[5] === false);
 range2.__bt.undoBulk();
 ok("range undo restores chapter 2", range2.state().read.Exodus[1] === false);
 
-// ---------- summary ----------
-console.log("\n" + (failures ? "\u2717 " + failures + " of " + checks + " checks failed" : "\u2713 all " + checks + " checks passed"));
-process.exit(failures ? 1 : 0);
+// ---------- 8. cloud sync (mocked) ----------
+// A minimal stand-in for the Supabase client: just enough auth + table
+// chaining for syncNow / sendMagicLink / verifyEmailCode to run for real.
+function makeSupabaseMock(cfg) {
+  cfg = cfg || {};
+  var calls = { signInWithOtp: [], verifyOtp: [], upsert: [], delete: 0, getSession: 0, auth: 0 };
+  var authCb = null;
+  var session = cfg.session === undefined ? null : cfg.session;
+  var remoteRow = cfg.remoteRow || null;
+  var pullError = cfg.pullError || null;
+  var pushError = cfg.pushError || null;
+  var deleteError = cfg.deleteError || null;
+  var signInError = cfg.signInError || null;
+  var verifyResult = cfg.verifyResult || { data: { session: session }, error: null };
+
+  function builder() {
+    var kind = "select";
+    var q = {
+      select: function () { return q; },
+      delete: function () { kind = "delete"; calls.delete++; return q; },
+      eq: function () { return q; },
+      upsert: function (payload, opts) { calls.upsert.push({ payload: payload, opts: opts }); return Promise.resolve({ error: pushError }); },
+      then: function (resolve) {
+        if (kind === "delete") return resolve({ data: null, error: deleteError });
+        resolve(pullError ? { data: null, error: pullError } : { data: remoteRow ? [remoteRow] : [], error: null });
+      }
+    };
+    return q;
+  }
+
+  var client = {
+    auth: {
+      getSession: function () { calls.getSession++; return Promise.resolve({ data: { session: session }, error: null }); },
+      onAuthStateChange: function (cb) { calls.auth++; authCb = cb; return { data: { subscription: { unsubscribe: function () {} } } }; },
+      signInWithOtp: function (args) { calls.signInWithOtp.push(args); return Promise.resolve({ data: { user: null, session: null }, error: signInError }); },
+      verifyOtp: function (args) { calls.verifyOtp.push(args); return Promise.resolve(verifyResult); },
+      signOut: function () { session = null; return Promise.resolve({ error: null }); },
+      _emit: function (event, s) { if (authCb) authCb(event, s || session); }
+    },
+    from: function () { return builder(); }
+  };
+  return { calls: calls, client: client, factory: function () { return client; } };
+}
+
+var TEST_SESSION = { user: { id: "user-1", email: "test@example.com" } };
+var HOUR = 3600e3;
+
+function cloudPayload(genesisRead, savedAt) {
+  var read = {};
+  SEED.books.forEach(function (b) { read[b.name] = new Array(b.chapters).fill(false); });
+  if (genesisRead) read.Genesis[0] = true;
+  return {
+    read: read, history: [], days: {}, bookLast: {}, translation: "NKJV",
+    plan: { target: null }, notes: {},
+    notif: { enabled: false, time: "08:00", last: "" },
+    savedAt: savedAt === undefined ? 1000 : savedAt
+  };
+}
+
+function bootSync(store, cfg) {
+  var mock = makeSupabaseMock(cfg);
+  var app = boot(store, { supabase: { createClient: mock.factory } });
+  return { app: app, mock: mock };
+}
+
+(async function () {
+  section("cloud sync (mocked)");
+  try {
+    // A fresh, empty instance pulls the cloud copy even if its local clock
+    // claims to be newer (the empty-instance guard).
+    var remoteOld = { updated_at: new Date(Date.now() - HOUR).toISOString(), payload: cloudPayload(true, Date.now() - HOUR) };
+    var fresh = bootSync(cloudPayload(false, Date.now() + 60000), { session: TEST_SESSION, remoteRow: remoteOld });
+    await fresh.app.__bt.syncNow();
+    ok("fresh instance pulls the cloud copy", fresh.app.state().read.Genesis[0] === true);
+    eq("fresh instance pushes once after pulling", fresh.mock.calls.upsert.length, 1);
+
+    // A newer remote row wins over older local progress.
+    var remoteNew = { updated_at: new Date().toISOString(), payload: cloudPayload(true, Date.now()) };
+    var newer = bootSync(cloudPayload(false, 1000), { session: TEST_SESSION, remoteRow: remoteNew });
+    await newer.app.__bt.syncNow();
+    ok("newer remote wins", newer.app.state().read.Genesis[0] === true);
+
+    // Newer local progress is kept and pushed.
+    var remoteOlder = { updated_at: new Date(Date.now() - HOUR).toISOString(), payload: cloudPayload(false, Date.now() - HOUR) };
+    var local = bootSync(cloudPayload(true, Date.now() + 60000), { session: TEST_SESSION, remoteRow: remoteOlder });
+    await local.app.__bt.syncNow();
+    ok("newer local progress is kept", local.app.state().read.Genesis[0] === true);
+    eq("push carries the local edit", local.mock.calls.upsert[0].payload.payload.read.Genesis[0], true);
+
+    // Pull failures surface and are recorded.
+    var broken = bootSync(cloudPayload(false), { session: TEST_SESSION, pullError: { message: "boom" } });
+    var pullErr = null;
+    try { await broken.app.__bt.syncNow(); } catch (e) { pullErr = e; }
+    ok("pull failure is thrown", !!pullErr && /sync pull failed/.test(pullErr.message));
+    ok("pull failure is recorded", /sync pull failed/.test(broken.app.__bt.kvGet("lastError", "")));
+
+    // Sign-in validation + redirect target.
+    var auth = bootSync(null, {});
+    var badEmail = null;
+    try { await auth.app.__bt.sendMagicLink("nope"); } catch (e) { badEmail = e; }
+    ok("invalid email is rejected", !!badEmail && /does not look valid/.test(badEmail.message));
+    await auth.app.__bt.sendMagicLink("  Foo@Example.COM ");
+    eq("email is normalized", auth.mock.calls.signInWithOtp[0].email, "foo@example.com");
+    eq("redirect targets the app directory", auth.mock.calls.signInWithOtp[0].options.emailRedirectTo, "https://example.test/");
+
+    // Code verification maps to verifyOtp({ type: "email" }).
+    var verifier = bootSync(null, { verifyResult: { data: { session: TEST_SESSION }, error: null } });
+    var shortCode = null;
+    try { await verifier.app.__bt.verifyEmailCode("a@b.co", "123"); } catch (e) { shortCode = e; }
+    ok("too-short code is rejected client-side", !!shortCode && /6/.test(shortCode.message));
+    ok("valid code verifies", (await verifier.app.__bt.verifyEmailCode("a@b.co", "123456")) === true);
+    eq("verifyOtp type is email", verifier.mock.calls.verifyOtp[0].type, "email");
+    eq("verifyOtp receives the code", verifier.mock.calls.verifyOtp[0].token, "123456");
+
+    // Expired/invalid codes explain the fix.
+    var expired = bootSync(null, { verifyResult: { data: null, error: { message: "Token has expired or is invalid" } } });
+    var expiredErr = null;
+    try { await expired.app.__bt.verifyEmailCode("a@b.co", "123456"); } catch (e) { expiredErr = e; }
+    ok("expired code explains the fix", !!expiredErr && /Request a fresh code/.test(expiredErr.message));
+
+    // The auth-state listener is wired up.
+    ok("auth state changes are observed", verifier.mock.calls.auth >= 1);
+  } catch (e) {
+    failures++;
+    console.log("  \u2717 cloud sync tests crashed \u2014 " + (e && e.message ? e.message : e));
+  }
+
+  // ---------- summary ----------
+  console.log("\n" + (failures ? "\u2717 " + failures + " of " + checks + " checks failed" : "\u2713 all " + checks + " checks passed"));
+  process.exit(failures ? 1 : 0);
+})();
